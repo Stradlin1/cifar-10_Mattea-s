@@ -89,18 +89,22 @@ CIFAR-10 官方提供：
 
 本项目不会在训练过程中查看官方 test 集。
 
-50,000 张官方 training images 会使用固定随机种子拆分为：
+50,000 张官方 training images 采用固定分层划分，不使用随机种子：
+
+```text
+每个类别 5,000 张
+├── 前 500 张  -> validation
+└── 后 4,500 张 -> train
+```
+
+10 个类别合计：
 
 ```text
 45,000 train
  5,000 validation
 ```
 
-默认随机种子：
-
-```text
-seed = 2026
-```
+因此 train 和 validation 中 10 个类别数量完全均衡，并且每次运行得到的划分完全一致。
 
 训练过程中：
 
@@ -126,7 +130,7 @@ final test accuracy
 
 这样可以避免用 test set 反复选择模型造成测试集泄漏。
 
-训练集使用随机裁剪和随机水平翻转；validation 和 test 均不使用随机数据增强。
+注意：数据集划分本身不随机，但训练 DataLoader 仍设置 `shuffle=True`，因此每个 epoch 会打乱训练样本顺序。训练集使用随机裁剪和随机水平翻转；validation 和 test 均不使用随机数据增强。
 
 ## 4. 项目结构
 
@@ -188,15 +192,13 @@ epochs     = 50
 batch size = 128
 optimizer  = AdamW
 lr         = 0.001
-val size   = 5000
-seed       = 2026
 scheduler  = CosineAnnealingLR
 ```
 
 也可以手动指定参数：
 
 ```bash
-python train.py --epochs 100 --batch-size 128 --lr 0.001 --val-size 5000 --seed 2026
+python train.py --epochs 100 --batch-size 128 --lr 0.001
 ```
 
 第一次运行时 torchvision 会自动下载 CIFAR-10。
@@ -204,7 +206,8 @@ python train.py --epochs 100 --batch-size 128 --lr 0.001 --val-size 5000 --seed 
 训练启动时会打印实际划分：
 
 ```text
-Dataset split: train=45000, val=5000, seed=2026
+Dataset split: train=45000, val=5000
+Split rule: fixed stratified split, 500 validation samples per class and 4500 training samples per class.
 Official CIFAR-10 test set is reserved for test.py only.
 ```
 
@@ -229,8 +232,8 @@ checkpoint 中记录：
 model weights
 best_val_acc
 epoch
-val_size
-seed
+split = fixed_stratified
+val_per_class = 500
 ```
 
 ## 8. 最终测试
