@@ -12,24 +12,42 @@ from model import MatteaNet
 
 CIFAR10_MEAN = (0.4914, 0.4822, 0.4465)
 CIFAR10_STD = (0.2470, 0.2435, 0.2616)
-CIFAR10_TRAIN_SIZE = 50_000
+NUM_CLASSES = 10
+VAL_PER_CLASS = 500
 
 
-def build_loaders(
-    data_dir: str,
-    batch_size: int,
-    workers: int,
-    val_size: int,
-    seed: int,
-):
-    """Build a reproducible train/validation split from CIFAR-10's training set.
+def build_stratified_indices(targets):
+    """Create a fixed stratified split without random numbers or a seed.
+
+    For each CIFAR-10 class, the first 500 samples encountered are assigned to
+    validation and the remaining 4500 samples are assigned to training.
+    """
+    val_counts = [0] * NUM_CLASSES
+    train_indices = []
+    val_indices = []
+
+    for index, label in enumerate(targets):
+        if val_counts[label] < VAL_PER_CLASS:
+            val_indices.append(index)
+            val_counts[label] += 1
+        else:
+            train_indices.append(index)
+
+    expected_val = NUM_CLASSES * VAL_PER_CLASS
+    if len(val_indices) != expected_val:
+        raise RuntimeError(
+            f"Expected {expected_val} validation samples, got {len(val_indices)}"
+        )
+
+    return train_indices, val_indices
+
+
+def build_loaders(data_dir: str, batch_size: int, workers: int):
+    """Build fixed train/validation loaders from CIFAR-10's training set.
 
     The official CIFAR-10 test set is intentionally not loaded here. It is used
     only by test.py after model selection is finished.
     """
-    if not 0 < val_size < CIFAR10_TRAIN_SIZE:
-        raise ValueError(f"val_size must be between 1 and {CIFAR10_TRAIN_SIZE - 1}")
-
     train_transform = transforms.Compose([
         transforms.RandomCrop(32, padding=4),
         transforms.RandomHorizontalFlip(),
@@ -57,15 +75,10 @@ def build_loaders(
         transform=eval_transform,
     )
 
-    split_generator = torch.Generator().manual_seed(seed)
-    indices = torch.randperm(CIFAR10_TRAIN_SIZE, generator=split_generator).tolist()
-    val_indices = indices[:val_size]
-    train_indices = indices[val_size:]
+    train_indices, val_indices = build_stratified_indices(train_full_aug.targets)
 
     train_set = Subset(train_full_aug, train_indices)
     val_set = Subset(train_full_eval, val_indices)
-
-    loader_generator = torch.Generator().manual_seed(seed)
 
     train_loader = DataLoader(
         train_set,
@@ -74,7 +87,6 @@ def build_loaders(
         num_workers=workers,
         pin_memory=True,
         persistent_workers=workers > 0,
-        generator=loader_generator,
     )
 
     val_loader = DataLoader(
@@ -117,15 +129,9 @@ def main():
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--workers", type=int, default=4)
-    parser.add_argument("--val-size", type=int, default=5000)
-    parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--data-dir", type=str, default="./data")
     parser.add_argument("--save-dir", type=str, default="./checkpoints")
     args = parser.parse_args()
-
-    torch.manual_seed(args.seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(args.seed)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -134,12 +140,15 @@ def main():
         args.data_dir,
         args.batch_size,
         args.workers,
-        args.val_size,
-        args.seed,
     )
     print(
         f"Dataset split: train={len(train_loader.dataset)}, "
-        f"val={len(val_loader.dataset)}, seed={args.seed}"
+        f"val={len(val_loader.dataset)}"
+    )
+    print(
+        "Split rule: fixed stratified split, "
+        f"{VAL_PER_CLASS} validation samples per class and "
+        f"{5000 - VAL_PER_CLASS} training samples per class."
     )
     print("Official CIFAR-10 test set is reserved for test.py only.")
 
@@ -192,8 +201,8 @@ def main():
                     "model": model.state_dict(),
                     "best_val_acc": best_val_acc,
                     "epoch": epoch,
-                    "val_size": args.val_size,
-                    "seed": args.seed,
+                    "split": "fixed_stratified",
+                    "val_per_class": VAL_PER_CLASS,
                 },
                 save_dir / "best.pth",
             )
