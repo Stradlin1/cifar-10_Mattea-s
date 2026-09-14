@@ -78,13 +78,63 @@ Linear 128 -> 10
 - 使用全局平均池化减少全连接层参数量
 - 最后一层输出 10 个 logits，对应 10 个类别
 
-## 3. 项目结构
+## 3. 数据划分与实验规范
+
+CIFAR-10 官方提供：
+
+```text
+50,000 张 training images
+10,000 张 test images
+```
+
+本项目不会在训练过程中查看官方 test 集。
+
+50,000 张官方 training images 会使用固定随机种子拆分为：
+
+```text
+45,000 train
+ 5,000 validation
+```
+
+默认随机种子：
+
+```text
+seed = 2026
+```
+
+训练过程中：
+
+```text
+train
+  ↓
+更新网络参数
+  ↓
+validation
+  ↓
+根据 val_acc 选择 best.pth
+```
+
+训练完成后才运行 `test.py`：
+
+```text
+best.pth
+  ↓
+official CIFAR-10 test set
+  ↓
+final test accuracy
+```
+
+这样可以避免用 test set 反复选择模型造成测试集泄漏。
+
+训练集使用随机裁剪和随机水平翻转；validation 和 test 均不使用随机数据增强。
+
+## 4. 项目结构
 
 ```text
 .
 ├── model.py          # MatteaNet 网络定义
-├── train.py          # 训练和验证
-├── test.py           # 加载 best.pth 测试准确率
+├── train.py          # train / validation 与 best checkpoint 选择
+├── test.py           # 官方 test 集最终评估
 ├── requirements.txt
 ├── .gitignore
 └── README.md
@@ -104,7 +154,7 @@ data/
 
 `data/` 和 `checkpoints/` 默认不会提交到 GitHub。
 
-## 4. 安装依赖
+## 5. 安装依赖
 
 ```bash
 pip install -r requirements.txt
@@ -112,7 +162,7 @@ pip install -r requirements.txt
 
 建议使用带 CUDA 的 PyTorch 环境训练。
 
-## 5. 检查网络是否能正常前向传播
+## 6. 检查网络是否能正常前向传播
 
 ```bash
 python model.py
@@ -125,7 +175,7 @@ Input shape : (4, 3, 32, 32)
 Output shape: (4, 10)
 ```
 
-## 6. 开始训练
+## 7. 开始训练
 
 ```bash
 python train.py
@@ -138,33 +188,54 @@ epochs     = 50
 batch size = 128
 optimizer  = AdamW
 lr         = 0.001
+val size   = 5000
+seed       = 2026
 scheduler  = CosineAnnealingLR
 ```
 
 也可以手动指定参数：
 
 ```bash
-python train.py --epochs 100 --batch-size 128 --lr 0.001
+python train.py --epochs 100 --batch-size 128 --lr 0.001 --val-size 5000 --seed 2026
 ```
 
 第一次运行时 torchvision 会自动下载 CIFAR-10。
 
-训练时会显示：
+训练启动时会打印实际划分：
+
+```text
+Dataset split: train=45000, val=5000, seed=2026
+Official CIFAR-10 test set is reserved for test.py only.
+```
+
+每个 epoch 显示：
 
 ```text
 train_loss
 train_acc
-test_loss
-test_acc
+val_loss
+val_acc
 ```
 
-当测试集准确率刷新时，会自动保存：
+当 validation accuracy 刷新时，会自动保存：
 
 ```text
 checkpoints/best.pth
 ```
 
-## 7. 测试训练好的模型
+checkpoint 中记录：
+
+```text
+model weights
+best_val_acc
+epoch
+val_size
+seed
+```
+
+## 8. 最终测试
+
+训练结束且模型选择完成后运行：
 
 ```bash
 python test.py
@@ -176,11 +247,16 @@ python test.py
 checkpoints/best.pth
 ```
 
-然后输出 CIFAR-10 测试集准确率。
+然后只在官方 CIFAR-10 test split 上进行最终评估，并输出：
 
-## 8. 训练流程
+```text
+selected checkpoint epoch
+best validation accuracy
+final test loss
+final test accuracy
+```
 
-训练的核心过程是：
+## 9. 训练核心流程
 
 ```text
 images
@@ -196,9 +272,14 @@ loss.backward()
 optimizer.step()
 ```
 
-其中 `loss.backward()` 计算梯度，`optimizer.step()` 根据梯度更新卷积核和其他可训练参数。
+其中：
 
-## 9. 后续可以继续尝试
+- `loss.backward()` 计算梯度
+- `optimizer.step()` 根据梯度更新卷积核和其他可训练参数
+- validation 只负责选择模型，不参与梯度更新
+- official test set 只用于最终报告成绩
+
+## 10. 后续可以继续尝试
 
 完成基础版本后，可以继续进行消融实验，例如：
 
