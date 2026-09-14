@@ -1,6 +1,6 @@
 # CIFAR-10 MatteaNet
 
-这是一个用于 CIFAR-10 图像分类的入门项目。模型 `MatteaNet` 不直接使用 ResNet、VGG 等现成网络，而是使用 PyTorch 基础模块自行搭建。
+这是一个用于 CIFAR-10 图像分类的自定义 CNN 项目。模型 `MatteaNet` 不直接调用 ResNet、VGG 等现成网络，而是使用 PyTorch 基础模块自行搭建。当前版本为 MatteaNet V2，核心结构是 Residual Block + SE Channel Attention。
 
 ## 1. 任务
 
@@ -20,63 +20,70 @@ CIFAR-10 一共有 10 个类别，每张图片大小为 `32 x 32`，共有 3 个
 
 其中 10 个输出分别对应 CIFAR-10 的 10 个类别。
 
-## 2. 网络结构
+## 2. MatteaNet V2 网络结构
 
-MatteaNet 一共包含 3 个卷积阶段：
+总体结构：
 
 ```text
 Input: 3 x 32 x 32
-
-Stage 1
-Conv 3 -> 32
-BatchNorm
-ReLU
-Conv 32 -> 32
-BatchNorm
-ReLU
-MaxPool
         ↓
-32 x 16 x 16
-
-Stage 2
-Conv 32 -> 64
-BatchNorm
-ReLU
-Conv 64 -> 64
-BatchNorm
-ReLU
-MaxPool
+Stem Conv 3 -> 64
         ↓
-64 x 8 x 8
-
-Stage 3
-Conv 64 -> 128
-BatchNorm
-ReLU
-Conv 128 -> 128
-BatchNorm
-ReLU
-MaxPool
+Stage 1: 2 x Residual-SE Block
+64 x 32 x 32
         ↓
-128 x 4 x 4
-
-Adaptive Average Pooling
+Stage 2: 2 x Residual-SE Block
+128 x 16 x 16
         ↓
-128 x 1 x 1
-
-Flatten
-Dropout
-Linear 128 -> 10
+Stage 3: 3 x Residual-SE Block
+256 x 8 x 8
+        ↓
+Stage 4: 2 x Residual-SE Block
+384 x 4 x 4
+        ↓
+Global Average Pooling
+384 x 1 x 1
+        ↓
+Flatten + Dropout
+        ↓
+Linear 384 -> 10
 ```
 
-设计思路：
+每个 `ResidualSEBlock` 的主分支大致为：
 
-- 空间尺寸逐渐减小：`32 -> 16 -> 8 -> 4`
-- 通道数量逐渐增大：`3 -> 32 -> 64 -> 128`
-- 前面的卷积负责提取局部特征，后面的卷积学习更高级的特征
-- 使用 BatchNorm 让训练更稳定
-- 使用全局平均池化减少全连接层参数量
-- 最后一层输出 10 个 logits，对应 10 个类别
+```text
+input
+  ↓
+3x3 Conv
+BatchNorm
+SiLU
+  ↓
+3x3 Conv
+BatchNorm
+  ↓
+SE Channel Attention
+  ↓
+Dropout2d
+  ↓
++ shortcut
+  ↓
+SiLU
+```
+
+如果输入输出通道不同，或者需要下采样，shortcut 会使用 `1x1 Conv + BatchNorm` 对齐形状。
+
+### 为什么比基础 CNN 更高级
+
+- 使用 Residual Connection，使深层网络更容易训练，梯度可以通过 shortcut 更顺畅地传播。
+- 使用 SE Channel Attention，让网络根据当前图片自适应地调整不同通道特征的重要程度。
+- 使用 SiLU 激活函数，相比普通 ReLU 更平滑。
+- 使用 stride=2 的卷积完成下采样，不再单独依赖 MaxPool。
+- 使用 Dropout2d 和分类头 Dropout 减少过拟合。
+- 使用 Global Average Pooling，降低全连接层参数量。
+- 通道数逐渐增加：`64 -> 128 -> 256 -> 384`。
+- 空间尺寸逐渐减小：`32 -> 16 -> 8 -> 4`。
+
+这个网络借鉴了现代 CNN 中常见的设计思想，但 `ResidualSEBlock`、stage 数量、通道数和整体组合均在本项目中自行定义，没有直接调用现成 ResNet 或 SE-ResNet 模型。
 
 ## 3. 数据划分与实验规范
 
@@ -93,7 +100,7 @@ CIFAR-10 官方提供：
 
 ```text
 每个类别 5,000 张
-├── 前 500 张  -> validation
+├── 前 500 张   -> validation
 └── 后 4,500 张 -> train
 ```
 
@@ -136,7 +143,7 @@ final test accuracy
 
 ```text
 .
-├── model.py          # MatteaNet 网络定义
+├── model.py          # MatteaNet V2 网络定义
 ├── train.py          # train / validation 与 best checkpoint 选择
 ├── test.py           # 官方 test 集最终评估
 ├── requirements.txt
@@ -172,11 +179,20 @@ pip install -r requirements.txt
 python model.py
 ```
 
-正常情况下输出张量形状应为：
+程序会打印：
 
 ```text
-Input shape : (4, 3, 32, 32)
-Output shape: (4, 10)
+Input shape
+Output shape
+Parameters
+Trainable params
+```
+
+正常输出张量形状应为：
+
+```text
+Input shape  : (4, 3, 32, 32)
+Output shape : (4, 10)
 ```
 
 ## 7. 开始训练
@@ -244,20 +260,7 @@ val_per_class = 500
 python test.py
 ```
 
-程序会加载：
-
-```text
-checkpoints/best.pth
-```
-
-然后只在官方 CIFAR-10 test split 上进行最终评估，并输出：
-
-```text
-selected checkpoint epoch
-best validation accuracy
-final test loss
-final test accuracy
-```
+程序会加载 `checkpoints/best.pth`，然后只在官方 CIFAR-10 test split 上进行最终评估。
 
 ## 9. 训练核心流程
 
@@ -282,15 +285,16 @@ optimizer.step()
 - validation 只负责选择模型，不参与梯度更新
 - official test set 只用于最终报告成绩
 
-## 10. 后续可以继续尝试
+## 10. 后续实验方向
 
-完成基础版本后，可以继续进行消融实验，例如：
+可以继续进行消融实验：
 
-- 去掉 BatchNorm 比较准确率
-- 去掉数据增强比较准确率
-- 改变通道数量，例如 `16 -> 32 -> 64`
-- 增加第四个卷积阶段
-- 使用 SGD 替换 AdamW
-- 加入自己实现的 Residual Block
+- 去掉 SE Attention
+- 去掉 Residual shortcut
+- 将 SiLU 改回 ReLU
+- 减少 Stage 3 的 block 数量
+- 修改通道宽度
+- AdamW 与 SGD 对比
+- 调整数据增强强度
 
-这样可以观察网络结构和训练策略对 CIFAR-10 分类性能的影响。
+这样可以分析 MatteaNet V2 中不同设计对 CIFAR-10 分类性能的影响。
