@@ -1,6 +1,7 @@
 import argparse
 
 import torch
+import torch.nn as nn
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
@@ -21,12 +22,14 @@ def main():
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
 
     transform = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize(CIFAR10_MEAN, CIFAR10_STD),
     ])
 
+    # The official CIFAR-10 test split is used only here, after model selection.
     test_set = datasets.CIFAR10(
         root=args.data_dir,
         train=False,
@@ -39,6 +42,7 @@ def main():
         shuffle=False,
         num_workers=args.workers,
         pin_memory=True,
+        persistent_workers=args.workers > 0,
     )
 
     model = MatteaNet().to(device)
@@ -46,22 +50,34 @@ def main():
     model.load_state_dict(checkpoint["model"])
     model.eval()
 
+    criterion = nn.CrossEntropyLoss()
+    total_loss = 0.0
     correct = 0
     total = 0
 
     for images, labels in test_loader:
         images = images.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
+
         outputs = model(images)
+        loss = criterion(outputs, labels)
         predicted = outputs.argmax(dim=1)
 
+        total_loss += loss.item() * images.size(0)
         correct += (predicted == labels).sum().item()
         total += labels.size(0)
 
-    accuracy = 100.0 * correct / total
-    print(f"Checkpoint epoch: {checkpoint.get('epoch', 'unknown')}")
-    print(f"Recorded best accuracy: {checkpoint.get('best_acc', 'unknown')}")
-    print(f"Test accuracy: {accuracy:.2f}%")
+    test_loss = total_loss / total
+    test_acc = 100.0 * correct / total
+
+    print(f"Selected checkpoint epoch: {checkpoint.get('epoch', 'unknown')}")
+    best_val_acc = checkpoint.get("best_val_acc", "unknown")
+    if isinstance(best_val_acc, (int, float)):
+        print(f"Best validation accuracy: {best_val_acc:.2f}%")
+    else:
+        print(f"Best validation accuracy: {best_val_acc}")
+    print(f"Final test loss: {test_loss:.4f}")
+    print(f"Final test accuracy: {test_acc:.2f}%")
 
 
 if __name__ == "__main__":
